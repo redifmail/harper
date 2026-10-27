@@ -165,6 +165,7 @@ const defaultEnabledDomains = [
 	'openrouter.ai',
 	'claude.ai',
 	'docs.google.com',
+	'keep.google.com',
 	'gemini.google.com',
 	'typst.app',
 	'steamcommunity.com',
