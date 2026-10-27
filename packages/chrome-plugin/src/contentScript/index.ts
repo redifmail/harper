@@ -159,86 +159,111 @@ function scan() {
 			fw.addTarget(element);
 		});
 
-	document.querySelectorAll('[contenteditable="true"],[contenteditable]').forEach((element) => {
-		if (element.classList.contains('cm-content') && element.closest('.cm-editor') != null) {
-			return;
-		}
+	document
+		.querySelectorAll<HTMLElement>('[contenteditable="true"],[contenteditable]')
+		.forEach((element) => {
+			if (element.classList.contains('cm-content') && element.closest('.cm-editor') != null) {
+				return;
+			}
 
-		const isLexicalEditor = element.getAttribute('data-lexical-editor') === 'true';
-		// Slack's message compose box (Quill-based) sets spellcheck="false" and provides its own
-		// spelling/autocomplete UI, but otherwise behaves like a normal rich-text contenteditable
-		// editor, so treat it the same way we treat Lexical editors: don't skip it purely because
-		// spellcheck is disabled.
-		const isQuillEditor = element.classList.contains('ql-editor');
-		// Allow Gmail and Outlook compose fields even when they disable browser spellcheck.
-		const isWebmail =
-			window.location.hostname === 'mail.google.com' ||
-			window.location.hostname === 'outlook.live.com';
+			const isLexicalEditor = element.getAttribute('data-lexical-editor') === 'true';
+			// Slack's message compose box (Quill-based) sets spellcheck="false" and provides its own
+			// spelling/autocomplete UI, but otherwise behaves like a normal rich-text contenteditable
+			// editor, so treat it the same way we treat Lexical editors: don't skip it purely because
+			// spellcheck is disabled.
+			const isQuillEditor = element.classList.contains('ql-editor');
+			// Allow Gmail and Outlook compose fields even when they disable browser spellcheck.
+			const isWebmail =
+				window.location.hostname === 'mail.google.com' ||
+				window.location.hostname === 'outlook.live.com';
 
-		if (
-			element.matches('[role="combobox"]') ||
-			element.getAttribute('data-enable-grammarly') === 'false' ||
-			(element.getAttribute('spellcheck') === 'false' &&
-				!isWebmail &&
-				!isLexicalEditor &&
-				!isQuillEditor &&
-				element.getAttribute('data-language') !== 'markdown')
-		) {
-			return;
-		}
+			// Google Keep uses an editable combobox for note bodies, unlike search comboboxes.
+			// The exception is limited to Keep; other comboboxes remain excluded.
+			const isGoogleKeepEditor =
+				window.location.hostname === 'keep.google.com' &&
+				element.getAttribute('role') === 'combobox' &&
+				element.isContentEditable;
 
-		if (element.classList.contains('ck-editor__editable')) {
-			element.querySelectorAll('p').forEach((paragraph) => {
-				if (paragraph.closest('[contenteditable="false"],[disabled],[readonly]') != null) {
-					return;
+			if (
+				(element.matches('[role="combobox"]') && !isGoogleKeepEditor) ||
+				element.getAttribute('data-enable-grammarly') === 'false' ||
+				(element.getAttribute('spellcheck') === 'false' &&
+					!isGoogleKeepEditor &&
+					!isWebmail &&
+					!isLexicalEditor &&
+					!isQuillEditor &&
+					element.getAttribute('data-language') !== 'markdown')
+			) {
+				return;
+			}
+
+			if (element.classList.contains('ck-editor__editable')) {
+				element.querySelectorAll('p').forEach((paragraph) => {
+					if (paragraph.closest('[contenteditable="false"],[disabled],[readonly]') != null) {
+						return;
+					}
+
+					if (!isVisible(paragraph)) {
+						return;
+					}
+
+					fw.addTarget(paragraph);
+				});
+
+				return;
+			}
+
+			const leafs = leafNodes(element);
+
+			const seenBlockContainers = new Set<Element>();
+
+			for (const leaf of leafs) {
+				if (
+					leaf.parentElement?.closest('[contenteditable="false"],[disabled],[readonly]') != null
+				) {
+					continue;
 				}
 
-				if (!isVisible(paragraph)) {
-					return;
+				const blockContainer = getClosestBlockAncestor(leaf, element);
+
+				if (!blockContainer || seenBlockContainers.has(blockContainer)) {
+					continue;
 				}
 
-				fw.addTarget(paragraph);
-			});
+				seenBlockContainers.add(blockContainer);
 
-			return;
-		}
+				if (!isVisible(blockContainer)) {
+					continue;
+				}
 
-		const leafs = leafNodes(element);
-
-		const seenBlockContainers = new Set<Element>();
-
-		for (const leaf of leafs) {
-			if (leaf.parentElement?.closest('[contenteditable="false"],[disabled],[readonly]') != null) {
-				continue;
+				fw.addTarget(blockContainer);
 			}
-
-			const blockContainer = getClosestBlockAncestor(leaf, element);
-
-			if (!blockContainer || seenBlockContainers.has(blockContainer)) {
-				continue;
-			}
-
-			seenBlockContainers.add(blockContainer);
-
-			if (!isVisible(blockContainer)) {
-				continue;
-			}
-
-			fw.addTarget(blockContainer);
-		}
-	});
+		});
 }
 
 scan();
 new MutationObserver(scan).observe(document.body, {
 	childList: true,
 	subtree: true,
+	// Keep activates existing note elements by toggling their editability.
+	...(window.location.hostname === 'keep.google.com'
+		? { attributes: true, attributeFilter: ['contenteditable'] }
+		: {}),
 });
 
 document.addEventListener(
 	'focusin',
 	(event) => {
 		const target = event.target;
+		// An already-active Keep note may gain focus without adding new DOM nodes.
+		if (
+			window.location.hostname === 'keep.google.com' &&
+			target instanceof HTMLElement &&
+			target.closest('[role="combobox"][contenteditable="true"]')
+		) {
+			scan();
+		}
+
 		if (!(target instanceof HTMLTextAreaElement)) {
 			return;
 		}
